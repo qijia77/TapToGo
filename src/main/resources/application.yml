@@ -13,15 +13,23 @@ management:
       exposure:
         include: health,info
 
+#app:
+#  openai:
+#    enabled: ${OPENAI_ENABLED:true}
+#    api-key: ${OPENAI_API_KEY:}
+#    # Supports proxy URLs with or without a trailing /v1.
+#    base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+#    model: ${OPENAI_MODEL:gpt-5.4}
+#    temperature: ${OPENAI_TEMPERATURE:0.5}
+#    web-search-enabled: ${OPENAI_WEB_SEARCH_ENABLED:true}
 app:
   openai:
-    enabled: ${OPENAI_ENABLED:true}
-    api-key: ${OPENAI_API_KEY:}
-    # Supports proxy URLs with or without a trailing /v1.
-    base-url: ${OPENAI_BASE_URL:https://api.openai.com}
-    model: ${OPENAI_MODEL:gpt-5.4}
-    temperature: ${OPENAI_TEMPERATURE:0.5}
-    web-search-enabled: ${OPENAI_WEB_SEARCH_ENABLED:true}
+    enabled: true
+    api-key: sk-efde5230b18d59e636649e41f98956c51f7dfcf1b5905b8828a564335113b6a9
+    base-url: https://sub.jlypx.de
+    model: gpt-5.4
+    temperature: 0.5
+    web-search-enabled: true
   amap:
     base-url: ${AMAP_BASE_URL:https://restapi.amap.com}
     api-key: ${AMAP_KEY:}

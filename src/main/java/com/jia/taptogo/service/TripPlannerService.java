@@ -3,6 +3,8 @@ package com.jia.taptogo.service;
 import com.jia.taptogo.model.AiTripDraft;
 import com.jia.taptogo.model.TripPlanRequest;
 import com.jia.taptogo.model.TripPlanResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -13,6 +15,8 @@ import java.util.UUID;
 
 @Service
 public class TripPlannerService {
+
+    private static final Logger log = LoggerFactory.getLogger(TripPlannerService.class);
 
     private static final Set<String> GENERIC_ACTIVITY_MARKERS = Set.of(
             "核心片区",
@@ -52,6 +56,7 @@ public class TripPlannerService {
             try {
                 OpenAiTripDraftService.GenerationResult result = openAiTripDraftService.generate(request);
                 if (isTooGeneric(result.draft(), request.destination())) {
+                    log.warn("OpenAI itinerary for '{}' was too generic; falling back to demo template.", request.destination());
                     draft = demoTripDraftService.generate(request);
                     planningSources = List.of();
                     mode = "demo-fallback";
@@ -61,6 +66,9 @@ public class TripPlannerService {
                     mode = result.webSearchUsed() ? "openai-web-search" : "openai";
                 }
             } catch (Exception exception) {
+                log.warn("OpenAI itinerary generation failed for '{}'; falling back to demo template. Reason: {}",
+                        request.destination(),
+                        exception.getMessage());
                 draft = demoTripDraftService.generate(request);
                 mode = "demo-fallback";
             }
