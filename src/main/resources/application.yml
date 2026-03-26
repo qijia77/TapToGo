@@ -1,0 +1,29 @@
+spring:
+  application:
+    name: TapToGo
+  config:
+    import: optional:file:./config/application-local.yml
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+app:
+  openai:
+    enabled: ${OPENAI_ENABLED:true}
+    api-key: ${OPENAI_API_KEY:}
+    # Supports proxy URLs with or without a trailing /v1.
+    base-url: ${OPENAI_BASE_URL:https://api.openai.com}
+    model: ${OPENAI_MODEL:gpt-5.4}
+    temperature: ${OPENAI_TEMPERATURE:0.5}
+    web-search-enabled: ${OPENAI_WEB_SEARCH_ENABLED:true}
+  amap:
+    base-url: ${AMAP_BASE_URL:https://restapi.amap.com}
+    api-key: ${AMAP_KEY:}
+    hotel-radius-meters: ${AMAP_HOTEL_RADIUS_METERS:3200}
+    restaurant-radius-meters: ${AMAP_RESTAURANT_RADIUS_METERS:2600}

@@ -1,0 +1,11 @@
+app:
+  openai:
+    enabled: true
+    api-key: sk-your-openai-key
+    # Supports proxy URLs with or without /v1 at the end.
+    base-url: https://api.openai.com
+    model: gpt-5.4
+    temperature: 0.5
+    web-search-enabled: true
+  amap:
+    api-key: your-amap-key
