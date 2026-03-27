@@ -37,6 +37,7 @@ config/application-local.yml
 
 ### VS Code ###
 .vscode/
+.worktrees/
 
 ### Mac OS ###
 .DS_Store
