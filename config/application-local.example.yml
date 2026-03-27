@@ -9,3 +9,5 @@ app:
     web-search-enabled: true
   amap:
     api-key: your-amap-key
+    js-key: your-amap-js-key
+    security-js-code: your-amap-security-js-code

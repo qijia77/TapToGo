@@ -1,5 +1,6 @@
 package com.jia.taptogo.controller;
 
+import com.jia.taptogo.config.AmapProperties;
 import com.jia.taptogo.config.OpenAiProperties;
 import com.jia.taptogo.model.FavoriteUpdateRequest;
 import com.jia.taptogo.model.TripPlanRequest;
@@ -25,10 +26,16 @@ public class TripPlanController {
 
     private final TripPlannerService tripPlannerService;
     private final OpenAiProperties openAiProperties;
+    private final AmapProperties amapProperties;
 
-    public TripPlanController(TripPlannerService tripPlannerService, OpenAiProperties openAiProperties) {
+    public TripPlanController(
+            TripPlannerService tripPlannerService,
+            OpenAiProperties openAiProperties,
+            AmapProperties amapProperties
+    ) {
         this.tripPlannerService = tripPlannerService;
         this.openAiProperties = openAiProperties;
+        this.amapProperties = amapProperties;
     }
 
     @GetMapping(value = "/health", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -43,7 +50,11 @@ public class TripPlanController {
                 "mode", mode,
                 "capability_mode", mode,
                 "configured", configured,
-                "web_search_enabled", webSearchEnabled
+                "web_search_enabled", webSearchEnabled,
+                "amap_api_ready", amapProperties.configured(),
+                "amap_js_ready", amapProperties.jsConfigured(),
+                "amap_js_key", amapProperties.jsKey(),
+                "amap_security_js_code", amapProperties.securityJsCode()
         );
     }
 

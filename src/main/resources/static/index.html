@@ -1,40 +1,46 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>TapToGo API</title>
-  <style>
-    body {
-      margin: 0;
-      min-height: 100vh;
-      display: grid;
-      place-items: center;
-      background: linear-gradient(160deg, #10242d, #163947);
-      color: #f8efe4;
-      font-family: "Segoe UI", sans-serif;
-    }
-    main {
-      width: min(720px, calc(100% - 32px));
-      padding: 32px;
-      border-radius: 24px;
-      background: rgba(255, 255, 255, 0.08);
-      backdrop-filter: blur(12px);
-    }
-    a { color: #ffd08a; }
-    code {
-      padding: 2px 8px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.08);
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TapToGo API</title>
+    <style>
+        body {
+            margin: 0;
+            min-height: 100vh;
+            display: grid;
+            place-items: center;
+            background: linear-gradient(160deg, #10242d, #163947);
+            color: #f8efe4;
+            font-family: "Segoe UI", sans-serif;
+        }
+
+        main {
+            width: min(720px, calc(100% - 32px));
+            padding: 32px;
+            border-radius: 24px;
+            background: rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(12px);
+        }
+
+        a {
+            color: #ffd08a;
+        }
+
+        code {
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.08);
+        }
+    </style>
 </head>
 <body>
-  <main>
+<main>
     <p>TapToGo backend is running.</p>
     <h1>Use the API at <code>/api/trips</code>.</h1>
     <p>The separate frontend lives in the <code>frontend/</code> directory.</p>
-    <p>Start it with <code>node frontend/server.mjs</code> and open <a href="http://localhost:4173">http://localhost:4173</a>.</p>
-  </main>
+    <p>Start it with <code>node frontend/server.mjs</code> and open <a href="http://localhost:4173">http://localhost:4173</a>.
+    </p>
+</main>
 </body>
 </html>

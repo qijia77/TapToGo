@@ -33,5 +33,7 @@ app:
   amap:
     base-url: ${AMAP_BASE_URL:https://restapi.amap.com}
     api-key: ${AMAP_KEY:}
+    js-key: ${AMAP_JS_KEY:}
+    security-js-code: ${AMAP_SECURITY_JS_CODE:}
     hotel-radius-meters: ${AMAP_HOTEL_RADIUS_METERS:3200}
     restaurant-radius-meters: ${AMAP_RESTAURANT_RADIUS_METERS:2600}

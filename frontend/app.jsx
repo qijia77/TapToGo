@@ -3,6 +3,15 @@ const { useEffect, useRef, useState } = React;
 const API_BASE = window.TAPTOGO_API_BASE || "http://localhost:8080";
 const FORM_STORAGE_KEY = "taptogo.frontend.form";
 const SELECTION_STORAGE_KEY = "taptogo.frontend.selection";
+const STACKED_PLANNER_MEDIA_QUERY = "(max-width: 1280px)";
+const AMAP_JS_API_VERSION = "2.0";
+const AMAP_PLUGIN_LIST = ["AMap.Scale", "AMap.ToolBar", "AMap.PlaceSearch", "AMap.Geocoder"];
+let amapLoaderState = {
+  key: "",
+  securityJsCode: "",
+  promise: null
+};
+const amapLookupCache = new Map();
 
 const {
   getUiCopy = () => ({
@@ -43,6 +52,15 @@ const {
     return parts.join(" ");
   },
   describePlanModeZh = () => "\u8fd9\u4efd\u884c\u7a0b\u7684\u751f\u6210\u72b6\u6001\u6682\u65f6\u65e0\u6cd5\u51c6\u786e\u5224\u5b9a\u3002",
+  buildRecommendationSections = () => [],
+  buildMapEntriesData = () => [],
+  getMapKindMeta = () => ({
+    label: "\u70b9\u4f4d",
+    marker: "\u70b9",
+    background: "#6f9fff",
+    foreground: "#ffffff"
+  }),
+  isSelfDriveMode = () => false,
   getStatusMessageZh,
   buildMapSummaryZh
 } = window.TapToGoUiHelpers || {};
@@ -88,6 +106,11 @@ function App() {
   const [selectedDay, setSelectedDay] = useState(0);
   const [hasMounted, setHasMounted] = useState(false);
   const [viewVersion, setViewVersion] = useState(0);
+  const [amapConfig, setAmapConfig] = useState(loadAmapRuntimeConfig());
+  const [focusedPointKey, setFocusedPointKey] = useState("");
+  const timelineRef = useRef(null);
+  const mapStageRef = useRef(null);
+  const pendingFocusRef = useRef("");
 
   useEffect(() => {
     localStorage.setItem(FORM_STORAGE_KEY, JSON.stringify(form));
@@ -121,7 +144,17 @@ function App() {
   const visibleHistory = filter === "favorites" ? history.filter((item) => item.favorite) : history;
   const stats = selectedPlan ? summarizePlan(selectedPlan) : null;
   const mapSummary = selectedPlan ? buildMapSummary(selectedPlan, selectedDay) : null;
-  const recommendationCards = selectedPlan ? buildRecommendationCards(selectedPlan) : [];
+  const recommendationSections = selectedPlan
+    ? buildRecommendationSections(selectedPlan, selectedDay)
+    : [];
+  const legendKinds = selectedPlan
+    ? [
+        "spot",
+        "stay",
+        "food",
+        ...(isSelfDriveMode(selectedPlan.travel_mode) ? ["parking", "refuel", "charging"] : [])
+      ]
+    : [];
   const planModeNote = selectedPlan
     ? describePlanMode(selectedPlan.planning_mode, selectedPlan.planning_sources?.length || 0)
     : message;
@@ -146,10 +179,30 @@ function App() {
     }
   }, [selectedId, selectedDay]);
 
+  useEffect(() => {
+    setFocusedPointKey("");
+  }, [selectedId, selectedDay]);
+
+  useEffect(() => {
+    if (!pendingFocusRef.current) {
+      return;
+    }
+
+    const section = pendingFocusRef.current;
+    const frameId = window.requestAnimationFrame(() => {
+      const target = section === "assistant" ? mapStageRef.current : timelineRef.current;
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+      pendingFocusRef.current = "";
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [selectedId, selectedDay, selectedPlan]);
+
   async function bootstrap() {
     try {
       const [health, items] = await Promise.all([api("/api/trips/health"), api("/api/trips/history")]);
       setBackendMode(health?.capability_mode || health?.mode || "demo");
+      setAmapConfig((current) => mergeAmapRuntimeConfig(current, health));
       setHistory(Array.isArray(items) ? items : []);
       setMessage(
         Array.isArray(items) && items.length
@@ -179,6 +232,7 @@ function App() {
       });
 
       setHistory((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+      pendingFocusRef.current = "timeline";
       setSelectedId(created.id);
       setMessage(getStatusMessage("ready"));
     } catch (error) {
@@ -199,6 +253,41 @@ function App() {
     } catch (error) {
       setMessage(error.message || getStatusMessage("error"));
     }
+  }
+
+  function handlePlanSelect(planId) {
+    if (planId === selectedId) {
+      timelineRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+
+    pendingFocusRef.current = "timeline";
+    setSelectedId(planId);
+  }
+
+  function handleDaySelect(dayNumber) {
+    const shouldFocusMap = isStackedPlannerLayout();
+
+    if (dayNumber === selectedDay) {
+      if (shouldFocusMap) {
+        mapStageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      return;
+    }
+
+    if (shouldFocusMap) {
+      pendingFocusRef.current = "assistant";
+    }
+    setSelectedDay(dayNumber);
+  }
+
+  function handleRecommendationSelect(item) {
+    if (!item?.mapKey) {
+      return;
+    }
+    pendingFocusRef.current = "assistant";
+    mapStageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setFocusedPointKey(item.mapKey);
   }
 
   return (
@@ -363,7 +452,7 @@ function App() {
                   <article
                     key={plan.id}
                     className={plan.id === selectedId ? "trip-card selected" : "trip-card"}
-                    onClick={() => setSelectedId(plan.id)}
+                    onClick={() => handlePlanSelect(plan.id)}
                   >
                     <div className="trip-card-top">
                       <span className="trip-mode">{formatMode(plan.planning_mode)}</span>
@@ -401,6 +490,7 @@ function App() {
                 key={`hero-${viewVersion}`}
                 className={`plan-hero ${getMotionClassName("section", 2, hasMounted)}`}
                 id="timeline"
+                ref={timelineRef}
               >
                 <div className="plan-hero-head">
                   <div>
@@ -436,7 +526,7 @@ function App() {
                       key={day.day}
                       type="button"
                       className={selectedDay === day.day ? "day-tab active" : "day-tab"}
-                      onClick={() => setSelectedDay(day.day)}
+                      onClick={() => handleDaySelect(day.day)}
                     >
                       {`\u7b2c ${day.day} \u5929`}
                     </button>
@@ -510,7 +600,7 @@ function App() {
           )}
         </section>
 
-        <aside className="map-stage" id="assistant">
+        <aside className="map-stage" id="assistant" ref={mapStageRef}>
           <div className="map-stage-inner">
             {selectedPlan ? (
               <>
@@ -524,9 +614,30 @@ function App() {
                     <span>{zh("\u4e0b\u4e00\u7ad9")}</span>
                     <strong>{mapSummary.nextStop}</strong>
                   </div>
+                  <div className="map-legend">
+                    {legendKinds.map((kind) => {
+                      const meta = getMapKindMeta(kind);
+                      return (
+                        <div key={kind} className="legend-item">
+                          <span
+                            className="legend-dot"
+                            style={{ background: meta.background, color: meta.foreground }}
+                          >
+                            {meta.marker}
+                          </span>
+                          <span>{meta.label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                <MapView plan={selectedPlan} selectedDay={selectedDay} />
+                <MapView
+                  plan={selectedPlan}
+                  selectedDay={selectedDay}
+                  amapConfig={amapConfig}
+                  focusedPointKey={focusedPointKey}
+                />
 
                 <div className="map-side-panels">
                   <section className="side-panel compact">
@@ -540,20 +651,55 @@ function App() {
                     </p>
                   </section>
 
-                  <section className="side-panel">
-                    <div className="section-kicker">{zh("\u4f4f\u5bbf\u5468\u8fb9")}</div>
-                    <div className="mini-grid">
-                      {recommendationCards.map((item) => (
-                        <article key={`${item.kind}-${item.name}`} className="mini-card">
-                          <div className={`mini-card-mark ${item.kind}`}></div>
-                          <div>
-                            <h4>{normalizeCopy(item.name)}</h4>
-                            <p>{normalizeCopy(item.reason)}</p>
-                          </div>
-                        </article>
-                      ))}
-                    </div>
-                  </section>
+                  {recommendationSections.map((section) => (
+                    <section key={section.key} className="side-panel">
+                      <div className="section-kicker">{section.kicker}</div>
+                      <h3>{section.title}</h3>
+
+                      {section.items ? (
+                        <div className="mini-grid">
+                          {section.items.map((item) => (
+                            <button
+                              key={item.mapKey}
+                              type="button"
+                              className={`mini-card ${focusedPointKey === item.mapKey ? "is-active" : ""}`}
+                              onClick={() => handleRecommendationSelect(item)}
+                            >
+                              <div className={`mini-card-mark ${item.kind}`}></div>
+                              <div>
+                                <h4>{normalizeCopy(item.name)}</h4>
+                                <p>{normalizeCopy(item.reason)}</p>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="mini-card-stack">
+                          {section.groups.map((group) => (
+                            <div key={group.key} className="mini-card-group">
+                              <div className="mini-card-group-title">{group.title}</div>
+                              <div className="mini-grid">
+                                {group.items.map((item) => (
+                                  <button
+                                    key={item.mapKey}
+                                    type="button"
+                                    className={`mini-card ${focusedPointKey === item.mapKey ? "is-active" : ""}`}
+                                    onClick={() => handleRecommendationSelect(item)}
+                                  >
+                                    <div className={`mini-card-mark ${item.kind}`}></div>
+                                    <div>
+                                      <h4>{normalizeCopy(item.name)}</h4>
+                                      <p>{normalizeCopy(item.reason)}</p>
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  ))}
 
                   <section className="side-panel sources">
                     <div className="section-kicker">{zh("\u6765\u6e90\u4e0e\u72b6\u6001")}</div>
@@ -652,112 +798,486 @@ function App() {
   );
 }
 
-function MapView({ plan, selectedDay }) {
+function MapView({ plan, selectedDay, amapConfig, focusedPointKey }) {
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const overlays = useRef([]);
+  const markerIndexRef = useRef(new Map());
+  const infoWindowIndexRef = useRef(new Map());
   const [unavailable, setUnavailable] = useState(false);
-  const visiblePoints = collectMapPoints(plan, selectedDay);
-  const routePoints = collectRoutePoints(plan, selectedDay);
+  const [mapError, setMapError] = useState("");
+  const [resolvedPoints, setResolvedPoints] = useState([]);
+  const [resolving, setResolving] = useState(false);
+  const mapEntries = buildMapEntriesData(plan, selectedDay);
+  const routePoints = buildResolvedRoutePoints(resolvedPoints, selectedDay);
+  const hasRenderablePoints = resolvedPoints.length > 0;
 
   useEffect(() => {
-    if (!window.L) {
-      setUnavailable(true);
+    return () => {
+      clearAmapOverlays(overlays.current);
+      overlays.current = [];
+      markerIndexRef.current.clear();
+      infoWindowIndexRef.current.clear();
+
+      if (mapInstance.current) {
+        mapInstance.current.destroy();
+        mapInstance.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function syncAmapView() {
+      setResolving(true);
+
+      try {
+        const AMap = await loadAmapJsApi(amapConfig);
+        if (cancelled) {
+          return;
+        }
+
+        if (!mapInstance.current && mapRef.current) {
+          mapInstance.current = new AMap.Map(mapRef.current, {
+            viewMode: "3D",
+            zoom: 11,
+            center: [116.397428, 39.90923],
+            mapStyle: "amap://styles/whitesmoke"
+          });
+          mapInstance.current.addControl(new AMap.Scale());
+          mapInstance.current.addControl(new AMap.ToolBar());
+        }
+
+        if (!mapInstance.current) {
+          return;
+        }
+
+        const nextPoints = await resolveMapEntriesWithAmap(AMap, plan.destination, mapEntries);
+        const destinationFallback = await resolveDestinationFallbackPoint(AMap, plan.destination);
+        const pointsToRender = nextPoints.length ? nextPoints : destinationFallback ? [destinationFallback] : [];
+        if (cancelled) {
+          return;
+        }
+
+        setUnavailable(false);
+        setResolvedPoints(pointsToRender);
+        setMapError(
+          nextPoints.length
+            ? ""
+            : destinationFallback
+              ? zh("\u884c\u7a0b\u70b9\u4f4d\u6682\u672a\u5168\u90e8\u5339\u914d\uff0c\u5df2\u5148\u5b9a\u4f4d\u5230\u76ee\u7684\u5730\u4e2d\u5fc3\u70b9\u3002")
+            : zh("\u9ad8\u5fb7\u5730\u56fe\u6682\u672a\u68c0\u7d22\u5230\u53ef\u7528\u70b9\u4f4d\uff0c\u8bf7\u68c0\u67e5 JS Key\u3001\u5b89\u5168\u5bc6\u94a5\u6216\u884c\u7a0b\u540d\u79f0\u3002")
+        );
+
+        renderAmapOverlays(
+          AMap,
+          mapInstance.current,
+          overlays,
+          markerIndexRef,
+          infoWindowIndexRef,
+          pointsToRender,
+          selectedDay
+        );
+        mapInstance.current.resize();
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setUnavailable(true);
+        setResolvedPoints([]);
+        setMapError(error.message || zh("\u9ad8\u5fb7\u5730\u56fe\u6682\u65f6\u4e0d\u53ef\u7528"));
+      } finally {
+        if (!cancelled) {
+          setResolving(false);
+        }
+      }
+    }
+
+    syncAmapView();
+
+    return () => {
+      cancelled = true;
+      clearAmapOverlays(overlays.current);
+      overlays.current = [];
+      markerIndexRef.current.clear();
+      infoWindowIndexRef.current.clear();
+    };
+  }, [amapConfig.key, amapConfig.securityJsCode, plan.id, plan.destination, selectedDay]);
+
+  useEffect(() => {
+    if (unavailable || !mapInstance.current || !mapRef.current || typeof ResizeObserver === "undefined") {
       return;
     }
 
-    if (!mapInstance.current && mapRef.current) {
-      mapInstance.current = window.L.map(mapRef.current, {
-        zoomControl: false,
-        attributionControl: false
-      }).setView([35.0116, 135.7681], 12);
+    const resizeObserver = new ResizeObserver(() => {
+      if (mapInstance.current) {
+        mapInstance.current.resize();
+      }
+    });
+    resizeObserver.observe(mapRef.current);
 
-      const layer = window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
-        attribution: "&copy; OpenStreetMap contributors"
-      });
-
-      layer.on("tileerror", () => setUnavailable(true));
-      layer.addTo(mapInstance.current);
-      window.L.control.zoom({ position: "bottomright" }).addTo(mapInstance.current);
-    }
-
-    if (!mapInstance.current) {
-      return;
-    }
-
-    overlays.current.forEach((overlay) => overlay.remove());
-    overlays.current = [];
-
-    visiblePoints.forEach((point) => {
-      const marker = window.L
-        .marker([point.lat, point.lon], {
-          icon: buildMarkerIcon(point.kind, point.primary)
-        })
-        .bindPopup(`<strong>${escapeHtml(point.label)}</strong><br/>${escapeHtml(point.kindLabel)}`);
-      marker.addTo(mapInstance.current);
-      overlays.current.push(marker);
+    const frameId = window.requestAnimationFrame(() => {
+      if (mapInstance.current) {
+        mapInstance.current.resize();
+      }
     });
 
-    if (routePoints.length > 1) {
-      const polyline = window.L.polyline(
-        routePoints.map((point) => [point.lat, point.lon]),
-        {
-          color: "#5f8fff",
-          weight: 4,
-          opacity: 0.82,
-          dashArray: "10 12"
-        }
-      );
-      polyline.addTo(mapInstance.current);
-      overlays.current.push(polyline);
-    }
+    return () => {
+      window.cancelAnimationFrame(frameId);
+      resizeObserver.disconnect();
+    };
+  }, [hasRenderablePoints, routePoints.length, unavailable]);
 
-    if (visiblePoints.length) {
-      mapInstance.current.fitBounds(
-        visiblePoints.map((point) => [point.lat, point.lon]),
-        {
-          padding: [36, 36]
-        }
-      );
+  useEffect(() => {
+    if (!focusedPointKey || !mapInstance.current) {
+      return;
     }
-
-    setTimeout(() => {
-      if (mapInstance.current) {
-        mapInstance.current.invalidateSize();
-      }
-    }, 0);
-  }, [plan, selectedDay, visiblePoints, routePoints]);
+    const marker = markerIndexRef.current.get(focusedPointKey);
+    const infoWindow = infoWindowIndexRef.current.get(focusedPointKey);
+    if (!marker || !infoWindow) {
+      return;
+    }
+    const position = marker.getPosition();
+    mapInstance.current.setCenter(position);
+    mapInstance.current.setZoom(Math.max(mapInstance.current.getZoom() || 13, 15));
+    infoWindow.open(mapInstance.current, position);
+  }, [focusedPointKey, resolvedPoints, selectedDay]);
 
   if (unavailable) {
     return (
       <div className="map-fallback">
         <div>
-          <strong>{zh("\u5730\u56fe\u6682\u65f6\u4e0d\u53ef\u7528")}</strong>
-          <p>{zh("\u5373\u4f7f\u5730\u56fe\u74e6\u7247\u52a0\u8f7d\u5931\u8d25\uff0c\u65f6\u95f4\u7ebf\u4e0e\u63a8\u8350\u9762\u677f\u4ecd\u53ef\u4f7f\u7528\u3002")}</p>
+          <strong>{zh("\u9ad8\u5fb7\u5730\u56fe\u6682\u65f6\u4e0d\u53ef\u7528")}</strong>
+          <p>{normalizeCopy(mapError) || zh("\u8bf7\u68c0\u67e5 JS Key\uff0csecurityJsCode \u548c\u52a0\u8f7d\u811a\u672c\u914d\u7f6e\u3002")}</p>
         </div>
       </div>
     );
   }
 
-  return <div ref={mapRef} className="map-canvas"></div>;
+  return (
+    <div className="map-canvas-shell">
+      <div ref={mapRef} className="map-canvas"></div>
+
+      {resolving && !hasRenderablePoints ? (
+        <div className="map-status-overlay">
+          <div>
+            <strong>{zh("\u9ad8\u5fb7\u5730\u56fe\u6b63\u5728\u5bf9\u9f50\u70b9\u4f4d")}</strong>
+            <p>{zh("\u6b63\u5728\u4f18\u5148\u4f7f\u7528\u540e\u7aef\u5750\u6807\uff0c\u5e76\u7528\u9ad8\u5fb7 POI \u68c0\u7d22\u4e3a\u5f53\u524d\u884c\u7a0b\u8865\u70b9\u3002")}</p>
+          </div>
+        </div>
+      ) : null}
+
+      {!resolving && !hasRenderablePoints ? (
+        <div className="map-status-overlay">
+          <div>
+            <strong>{zh("\u5f53\u524d\u5730\u56fe\u8fd8\u6ca1\u6709\u53ef\u7528\u5750\u6807")}</strong>
+            <p>
+              {selectedDay
+                ? `\u7b2c ${selectedDay} \u5929\u6682\u672a\u5339\u914d\u5230\u53ef\u5c55\u793a\u7684\u70b9\u4f4d\uff0c\u4f60\u53ef\u4ee5\u7a0d\u540e\u91cd\u65b0\u751f\u6210\u6216\u68c0\u67e5\u9ad8\u5fb7 JS \u914d\u7f6e\u3002`
+                : "\u5f53\u524d\u884c\u7a0b\u8fd8\u6ca1\u6709\u5339\u914d\u5230\u53ef\u7528\u70b9\u4f4d\uff0c\u53ef\u4ee5\u5148\u67e5\u770b\u65f6\u95f4\u7ebf\u4e0e\u4f4f\u5bbf\u63a8\u8350\u3002"}
+            </p>
+            {mapError ? <p className="map-empty-detail">{normalizeCopy(mapError)}</p> : null}
+            {plan?.attribution ? <p className="map-empty-detail">{normalizeCopy(plan.attribution)}</p> : null}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
-function buildMarkerIcon(kind, primary) {
-  const palette = {
-    stay: ["#0057be", "#ffffff", "ST"],
-    food: ["#a13915", "#ffffff", "FD"],
-    spot: ["#00675f", "#ffffff", "GO"],
-    other: ["#6f9fff", "#ffffff", "PT"]
-  };
-  const [background, foreground, label] = palette[kind] || palette.other;
+function clearAmapOverlays(items) {
+  items.forEach((item) => item?.setMap?.(null));
+}
+
+function renderAmapOverlays(
+  AMap,
+  map,
+  overlaysRef,
+  markerIndexRef,
+  infoWindowIndexRef,
+  points,
+  selectedDay
+) {
+  clearAmapOverlays(overlaysRef.current);
+  overlaysRef.current = [];
+  markerIndexRef.current.clear();
+  infoWindowIndexRef.current.clear();
+
+  points.forEach((point) => {
+    const marker = createAmapMarker(AMap, point);
+    marker.setMap(map);
+    overlaysRef.current.push(marker);
+    markerIndexRef.current.set(point.key, marker);
+    if (marker.__tapToGoInfoWindow) {
+      infoWindowIndexRef.current.set(point.key, marker.__tapToGoInfoWindow);
+    }
+  });
+
+  const routePoints = buildResolvedRoutePoints(points, selectedDay);
+  if (routePoints.length > 1) {
+    const polyline = new AMap.Polyline({
+      path: routePoints.map((point) => [point.lon, point.lat]),
+      strokeColor: "#5f8fff",
+      strokeWeight: 5,
+      strokeOpacity: 0.82,
+      strokeStyle: "dashed"
+    });
+    polyline.setMap(map);
+    overlaysRef.current.push(polyline);
+  }
+
+  if (overlaysRef.current.length) {
+    map.setFitView(overlaysRef.current, false, [40, 40, 40, 40]);
+  }
+}
+
+function createAmapMarker(AMap, point) {
+  const size = point.primary ? 42 : 34;
+  const marker = new AMap.Marker({
+    position: [point.lon, point.lat],
+    title: `${point.label} ${point.kindLabel}`,
+    offset: new AMap.Pixel(-(size / 2), -(size / 2)),
+    content: buildAmapMarkerMarkup(point.kind, point.primary)
+  });
+
+  const infoWindow = new AMap.InfoWindow({
+    content: `<strong>${escapeHtml(point.label)}</strong><br/>${escapeHtml(point.kindLabel)}`,
+    offset: new AMap.Pixel(0, -18)
+  });
+
+  marker.__tapToGoInfoWindow = infoWindow;
+  marker.on("click", () => infoWindow.open(marker.getMap(), marker.getPosition()));
+  return marker;
+}
+
+function buildAmapMarkerMarkup(kind, primary) {
+  const meta = getMapKindMeta(kind);
   const size = primary ? 42 : 34;
 
-  return window.L.divIcon({
-    className: "custom-marker",
-    html: `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${background};color:${foreground};display:grid;place-items:center;box-shadow:0 18px 30px rgba(36,44,81,0.18);border:3px solid rgba(255,255,255,0.96);font-size:${primary ? "11px" : "10px"};font-weight:800;">${label}</div>`,
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2]
+  return `<div style="width:${size}px;height:${size}px;border-radius:999px;background:${meta.background};color:${meta.foreground};display:grid;place-items:center;box-shadow:0 18px 30px rgba(36,44,81,0.18);border:3px solid rgba(255,255,255,0.96);font-size:${primary ? "14px" : "12px"};font-weight:800;">${meta.marker}</div>`;
+}
+
+async function loadAmapJsApi(amapConfig) {
+  const key = String(amapConfig?.key || window.TAPTOGO_AMAP_KEY || "").trim();
+  const securityJsCode = String(amapConfig?.securityJsCode || window.TAPTOGO_AMAP_SECURITY_CODE || "").trim();
+
+  if (!key || !securityJsCode) {
+    throw new Error(zh("\u9ad8\u5fb7\u524d\u7aef\u5730\u56fe\u672a\u914d\u7f6e JS Key \u6216 securityJsCode\u3002"));
+  }
+  if (!window.AMapLoader) {
+    throw new Error(zh("\u9ad8\u5fb7 Loader \u811a\u672c\u672a\u6b63\u786e\u52a0\u8f7d\u3002"));
+  }
+
+  window._AMapSecurityConfig = {
+    securityJsCode
+  };
+
+  if (
+    amapLoaderState.promise &&
+    amapLoaderState.key === key &&
+    amapLoaderState.securityJsCode === securityJsCode
+  ) {
+    return amapLoaderState.promise;
+  }
+
+  amapLoaderState = {
+    key,
+    securityJsCode,
+    promise: window.AMapLoader.load({
+      key,
+      version: AMAP_JS_API_VERSION,
+      plugins: AMAP_PLUGIN_LIST
+    })
+  };
+
+  return amapLoaderState.promise;
+}
+
+async function resolveMapEntriesWithAmap(AMap, destination, entries) {
+  const resolved = [];
+
+  for (const entry of entries) {
+    const point = await resolveMapEntryWithAmap(AMap, destination, entry);
+    if (point) {
+      resolved.push(point);
+    }
+  }
+
+  return dedupeResolvedPoints(resolved);
+}
+
+async function resolveDestinationFallbackPoint(AMap, destination) {
+  const keyword = String(destination || "").trim();
+  if (!keyword) {
+    return null;
+  }
+
+  const placeMatch = await searchAmapPlace(AMap, "", keyword);
+  const geocodeMatch = placeMatch ? null : await geocodeAmapKeyword(AMap, "", keyword);
+  const location = placeMatch || geocodeMatch;
+  if (!location) {
+    return null;
+  }
+
+  return {
+    key: `destination::${keyword}`,
+    lat: location.lat,
+    lon: location.lon,
+    label: `${keyword}\u4e2d\u5fc3`,
+    address: keyword,
+    kind: "other",
+    primary: true,
+    day: 0,
+    sequence: 0,
+    kindLabel: getMapKindMeta("other").label
+  };
+}
+
+async function resolveMapEntryWithAmap(AMap, destination, entry) {
+  const existingLocation = normalizeCoordinatePair(entry.lat, entry.lon);
+  if (existingLocation) {
+    return { ...entry, ...existingLocation };
+  }
+
+  const cacheKey = `${destination}::${entry.kind}::${entry.label}::${entry.address}`;
+  if (amapLookupCache.has(cacheKey)) {
+    const cached = amapLookupCache.get(cacheKey);
+    return cached ? { ...entry, ...cached } : null;
+  }
+
+  const keywords = buildAmapSearchKeywords(entry, destination);
+  const primaryLookup = await resolveMapEntryLookup(AMap, destination, keywords);
+  if (primaryLookup) {
+    amapLookupCache.set(cacheKey, primaryLookup);
+    return { ...entry, ...primaryLookup };
+  }
+
+  const broadLookup = destination ? await resolveMapEntryLookup(AMap, "", keywords) : null;
+  if (broadLookup) {
+    amapLookupCache.set(cacheKey, broadLookup);
+    return { ...entry, ...broadLookup };
+  }
+
+  amapLookupCache.set(cacheKey, null);
+  return null;
+}
+
+async function resolveMapEntryLookup(AMap, destination, keywords) {
+  for (const keyword of keywords) {
+    const placeMatch = await searchAmapPlace(AMap, destination, keyword);
+    if (placeMatch) {
+      return placeMatch;
+    }
+
+    const geocodeMatch = await geocodeAmapKeyword(AMap, destination, keyword);
+    if (geocodeMatch) {
+      return geocodeMatch;
+    }
+  }
+
+  return null;
+}
+
+function searchAmapPlace(AMap, destination, keyword) {
+  return new Promise((resolve) => {
+    const city = String(destination || "").trim();
+    const placeSearch = new AMap.PlaceSearch({
+      ...(city ? { city, citylimit: false } : {}),
+      pageSize: 1,
+      pageIndex: 1
+    });
+
+    placeSearch.search(keyword, (status, result) => {
+      if (status !== "complete") {
+        resolve(null);
+        return;
+      }
+
+      const poi = result?.poiList?.pois?.[0];
+      const location = extractAmapLngLat(poi?.location);
+      resolve(location);
+    });
   });
+}
+
+function geocodeAmapKeyword(AMap, destination, keyword) {
+  return new Promise((resolve) => {
+    const city = String(destination || "").trim();
+    const geocoder = new AMap.Geocoder(city ? { city } : {});
+
+    geocoder.getLocation(keyword, (status, result) => {
+      if (status !== "complete") {
+        resolve(null);
+        return;
+      }
+
+      const location = extractAmapLngLat(result?.geocodes?.[0]?.location);
+      resolve(location);
+    });
+  });
+}
+
+function extractAmapLngLat(location) {
+  if (!location) {
+    return null;
+  }
+
+  if (typeof location.getLng === "function" && typeof location.getLat === "function") {
+    return {
+      lon: location.getLng(),
+      lat: location.getLat()
+    };
+  }
+
+  if (isFiniteCoordinate(location.lng) && isFiniteCoordinate(location.lat)) {
+    return {
+      lon: location.lng,
+      lat: location.lat
+    };
+  }
+
+  if (Array.isArray(location) && location.length >= 2) {
+    const lon = Number(location[0]);
+    const lat = Number(location[1]);
+    if (Number.isFinite(lon) && Number.isFinite(lat)) {
+      return { lon, lat };
+    }
+  }
+
+  return null;
+}
+
+function buildAmapSearchKeywords(entry, destination) {
+  const keywords = [
+    entry.address,
+    entry.label,
+    entry.label && destination ? `${entry.label} ${destination}` : ""
+  ];
+
+  return [...new Set(keywords.filter(Boolean))];
+}
+
+function dedupeResolvedPoints(points) {
+  const seen = new Set();
+  return points.filter((point) => {
+    const key = `${point.kind}::${point.label}::${point.lat}::${point.lon}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+function buildResolvedRoutePoints(points, selectedDay) {
+  if (!selectedDay) {
+    return [];
+  }
+
+  return points
+    .filter((point) => Number(point.day) === Number(selectedDay) && point.kind === "spot")
+    .sort((left, right) => left.sequence - right.sequence);
 }
 
 async function api(path, options) {
@@ -798,6 +1318,28 @@ function collectMapPoints(plan, selectedDay) {
   return points;
 }
 
+function collectMapEntries(plan, selectedDay) {
+  const entries = [];
+
+  (plan.recommended_hotels || []).forEach((item, index) =>
+    pushMapEntry(entries, item, "stay", index === 0, 0, index)
+  );
+  (plan.recommended_restaurants || []).forEach((item, index) =>
+    pushMapEntry(entries, item, "food", index === 0, 0, index)
+  );
+
+  (plan.daily_itinerary || []).forEach((day) => {
+    if (selectedDay && day.day !== selectedDay) {
+      return;
+    }
+    (day.activities || []).forEach((item, index) => {
+      pushMapEntry(entries, item, "spot", index === 0 && day.day === selectedDay, day.day, index);
+    });
+  });
+
+  return entries;
+}
+
 function collectRoutePoints(plan, selectedDay) {
   if (!selectedDay) {
     return [];
@@ -811,6 +1353,22 @@ function collectRoutePoints(plan, selectedDay) {
   return (day.activities || [])
     .filter((item) => isFiniteCoordinate(item.latitude) && isFiniteCoordinate(item.longitude))
     .map((item) => ({ lat: item.latitude, lon: item.longitude }));
+}
+
+function pushMapEntry(entries, item, kind, primary, day, sequence) {
+  const kindLabel = kind === "stay" ? "\u4f4f\u5bbf" : kind === "food" ? "\u7f8e\u98df" : "\u6d3b\u52a8";
+
+  entries.push({
+    lat: item.latitude,
+    lon: item.longitude,
+    label: normalizeCopy(item.name),
+    address: normalizeCopy(item.address),
+    kind,
+    primary,
+    day,
+    sequence,
+    kindLabel
+  });
 }
 
 function pushPoint(points, item, kind, primary) {
@@ -830,7 +1388,49 @@ function pushPoint(points, item, kind, primary) {
 }
 
 function isFiniteCoordinate(value) {
-  return typeof value === "number" && Number.isFinite(value);
+  return normalizeCoordinateValue(value) !== null;
+}
+
+function normalizeCoordinateValue(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const next = Number(value);
+    return Number.isFinite(next) ? next : null;
+  }
+  return null;
+}
+
+function normalizeCoordinatePair(lat, lon) {
+  const nextLat = normalizeCoordinateValue(lat);
+  const nextLon = normalizeCoordinateValue(lon);
+  if (nextLat === null || nextLon === null) {
+    return null;
+  }
+
+  return {
+    lat: nextLat,
+    lon: nextLon
+  };
+}
+
+function isStackedPlannerLayout() {
+  return Boolean(window.matchMedia?.(STACKED_PLANNER_MEDIA_QUERY).matches);
+}
+
+function loadAmapRuntimeConfig() {
+  return {
+    key: String(window.TAPTOGO_AMAP_KEY || "").trim(),
+    securityJsCode: String(window.TAPTOGO_AMAP_SECURITY_CODE || "").trim()
+  };
+}
+
+function mergeAmapRuntimeConfig(current, health) {
+  return {
+    key: String(health?.amap_js_key || current?.key || "").trim(),
+    securityJsCode: String(health?.amap_security_js_code || current?.securityJsCode || "").trim()
+  };
 }
 
 function loadStoredForm() {

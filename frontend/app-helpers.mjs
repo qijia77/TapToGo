@@ -80,6 +80,223 @@ export function getMotionClassName(kind, delayIndex, visible) {
   return parts.join(" ");
 }
 
+export function isSelfDriveMode(mode) {
+  return String(mode || "").trim().toLowerCase() === "self-drive";
+}
+
+export function buildPlaceKey(kind, item) {
+  return `${kind}::${String(item?.name || "").trim()}::${item?.day ?? "all"}`;
+}
+
+export function getMapKindMeta(kind) {
+  const palette = {
+    spot: {
+      label: "\u666f\u70b9",
+      marker: "\u666f",
+      background: "#0b8a78",
+      foreground: "#ffffff"
+    },
+    stay: {
+      label: "\u4f4f\u5bbf",
+      marker: "\u5bbf",
+      background: "#0057be",
+      foreground: "#ffffff"
+    },
+    food: {
+      label: "\u5403\u996d",
+      marker: "\u98df",
+      background: "#c4571e",
+      foreground: "#ffffff"
+    },
+    parking: {
+      label: "\u505c\u8f66",
+      marker: "P",
+      background: "#3348b8",
+      foreground: "#ffffff"
+    },
+    refuel: {
+      label: "\u52a0\u6cb9",
+      marker: "\u6cb9",
+      background: "#7b4d1f",
+      foreground: "#ffffff"
+    },
+    charging: {
+      label: "\u5145\u7535",
+      marker: "\u7535",
+      background: "#0f9fb8",
+      foreground: "#ffffff"
+    },
+    other: {
+      label: "\u70b9\u4f4d",
+      marker: "\u70b9",
+      background: "#6f9fff",
+      foreground: "#ffffff"
+    }
+  };
+
+  return palette[kind] || palette.other;
+}
+
+export function buildRecommendationSections(plan, selectedDay) {
+  const matchesDay = (item) =>
+    !selectedDay || item?.day == null || Number(item.day) === Number(selectedDay);
+  const nearby = (plan?.recommended_food_nearby || []).filter(matchesDay);
+  const hot = (plan?.recommended_food_hot || []).length
+    ? plan.recommended_food_hot
+    : plan?.recommended_restaurants || [];
+  const sections = [];
+
+  if ((plan?.recommended_hotels || []).length) {
+    sections.push({
+      key: "stay",
+      kicker: "\u4f4f\u5bbf",
+      title: "\u4f4f\u5bbf\u5468\u8fb9",
+      items: plan.recommended_hotels.slice(0, 3).map((item) => ({
+        ...item,
+        kind: "stay",
+        mapKey: buildPlaceKey("stay", item)
+      }))
+    });
+  }
+
+  if (nearby.length) {
+    sections.push({
+      key: "food-nearby",
+      kicker: "\u7f8e\u98df",
+      title: "\u666f\u70b9\u9644\u8fd1",
+      items: nearby.slice(0, 6).map((item) => ({
+        ...item,
+        kind: "food",
+        mapKey: buildPlaceKey("food", item)
+      }))
+    });
+  }
+
+  if (hot.length) {
+    sections.push({
+      key: "food-hot",
+      kicker: "\u7f8e\u98df",
+      title: "\u7206\u706b\u63a8\u8350",
+      items: hot.slice(0, 6).map((item) => ({
+        ...item,
+        kind: "food",
+        mapKey: buildPlaceKey("food", item)
+      }))
+    });
+  }
+
+  if (isSelfDriveMode(plan?.travel_mode)) {
+    const groups = [
+      {
+        key: "parking",
+        title: "\u505c\u8f66",
+        items: filterDriveItems(plan?.recommended_parking || [], selectedDay, "parking")
+      },
+      {
+        key: "refuel",
+        title: "\u52a0\u6cb9",
+        items: filterDriveItems(plan?.recommended_refuel || [], selectedDay, "refuel")
+      },
+      {
+        key: "charging",
+        title: "\u5145\u7535",
+        items: filterDriveItems(plan?.recommended_charging || [], selectedDay, "charging")
+      }
+    ].filter((group) => group.items.length);
+
+    if (groups.length) {
+      sections.push({
+        key: "drive-support",
+        kicker: "\u81ea\u9a7e",
+        title: "\u81ea\u9a7e\u8865\u7ed9",
+        groups
+      });
+    }
+  }
+
+  return sections;
+}
+
+export function buildMapEntriesData(plan, selectedDay) {
+  const entries = [];
+
+  const pushEntry = (item, kind, primary, day = 0, sequence = 0) => {
+    if (!item) {
+      return;
+    }
+    const meta = getMapKindMeta(kind);
+    entries.push({
+      key: buildPlaceKey(kind, item),
+      lat: item.latitude,
+      lon: item.longitude,
+      label: String(item.name || ""),
+      address: String(item.address || ""),
+      kind,
+      primary,
+      day,
+      sequence,
+      kindLabel: meta.label
+    });
+  };
+
+  (plan?.recommended_hotels || []).forEach((item, index) => {
+    pushEntry(item, "stay", index === 0);
+  });
+
+  (plan?.recommended_food_nearby || []).forEach((item, index) => {
+    if (!selectedDay || item?.day == null || Number(item.day) === Number(selectedDay)) {
+      pushEntry(item, "food", index === 0, item?.day ?? 0, index);
+    }
+  });
+
+  const hotItems = (plan?.recommended_food_hot || []).length
+    ? plan.recommended_food_hot
+    : plan?.recommended_restaurants || [];
+  hotItems.forEach((item, index) => {
+    pushEntry(item, "food", false, item?.day ?? 0, index);
+  });
+
+  (plan?.recommended_parking || []).forEach((item, index) => {
+    if (!selectedDay || item?.day == null || Number(item.day) === Number(selectedDay)) {
+      pushEntry(item, "parking", index === 0, item?.day ?? 0, index);
+    }
+  });
+
+  (plan?.recommended_refuel || []).forEach((item, index) => {
+    if (!selectedDay || item?.day == null || Number(item.day) === Number(selectedDay)) {
+      pushEntry(item, "refuel", index === 0, item?.day ?? 0, index);
+    }
+  });
+
+  (plan?.recommended_charging || []).forEach((item, index) => {
+    if (!selectedDay || item?.day == null || Number(item.day) === Number(selectedDay)) {
+      pushEntry(item, "charging", index === 0, item?.day ?? 0, index);
+    }
+  });
+
+  (plan?.daily_itinerary || []).forEach((day) => {
+    if (selectedDay && Number(day.day) !== Number(selectedDay)) {
+      return;
+    }
+    (day.activities || []).forEach((item, index) => {
+      pushEntry(item, "spot", index === 0 && Number(day.day) === Number(selectedDay), day.day, index);
+    });
+  });
+
+  return entries;
+}
+
+function filterDriveItems(items, selectedDay, kind) {
+  return items
+    .filter((item) => !selectedDay || item?.day == null || Number(item.day) === Number(selectedDay))
+    .slice(0, 4)
+    .map((item) => ({
+      ...item,
+      kind,
+      mapKey: buildPlaceKey(kind, item)
+    }));
+}
+
 if (typeof window !== "undefined") {
   window.TapToGoUiHelpers = {
     getUiCopy,
@@ -87,6 +304,11 @@ if (typeof window !== "undefined") {
     formatModeZh,
     describeDayZh,
     describePlanModeZh,
-    getMotionClassName
+    getMotionClassName,
+    isSelfDriveMode,
+    buildPlaceKey,
+    getMapKindMeta,
+    buildRecommendationSections,
+    buildMapEntriesData
   };
 }

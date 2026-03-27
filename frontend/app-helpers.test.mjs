@@ -3,12 +3,17 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import {
+  buildMapEntriesData,
+  buildPlaceKey,
+  buildRecommendationSections,
   describeDayZh,
   describePlanModeZh,
   formatModeZh,
   formatTravelModeZh,
+  getMapKindMeta,
   getMotionClassName,
-  getUiCopy
+  getUiCopy,
+  isSelfDriveMode
 } from "./app-helpers.mjs";
 
 const helperSource = readFileSync(
@@ -63,6 +68,123 @@ test("plan mode explanation distinguishes actual generation from capability", ()
     describePlanModeZh("openai-web-search", 2),
     /\u5df2\u4fdd\u7559 2 \u6761\u8054\u7f51\u6765\u6e90/
   );
+});
+
+test("grouped recommendation builder splits nearby, hot, and self-drive sections", () => {
+  const sections = buildRecommendationSections(
+    {
+      travel_mode: "Self-drive",
+      recommended_hotels: [
+        {
+          name: "\u7fe0\u6e56\u9152\u5e97",
+          reason: "\u9002\u5408\u4f5c\u4e3a\u4f4f\u5bbf\u843d\u70b9"
+        }
+      ],
+      recommended_food_nearby: [
+        {
+          name: "\u7fe0\u6e56\u7c73\u7ebf",
+          reason: "\u79bb\u7b2c 1 \u5929\u666f\u70b9\u5f88\u8fd1",
+          day: 1
+        },
+        {
+          name: "\u6ec7\u6c60\u5c0f\u9986",
+          reason: "\u79bb\u7b2c 2 \u5929\u666f\u70b9\u5f88\u8fd1",
+          day: 2
+        }
+      ],
+      recommended_food_hot: [
+        {
+          name: "\u8fc7\u6865\u7c73\u7ebf\u9986",
+          reason: "\u7231\u5403\u699c\u5355\u70ed\u5ea6\u5f88\u9ad8"
+        }
+      ],
+      recommended_parking: [
+        {
+          name: "\u5357\u95e8\u505c\u8f66\u573a",
+          reason: "\u7b2c 1 \u5929\u505c\u8f66\u65b9\u4fbf",
+          day: 1
+        }
+      ],
+      recommended_refuel: [
+        {
+          name: "\u73af\u57ce\u52a0\u6cb9\u7ad9",
+          reason: "\u9002\u5408\u7b2c 1 \u5929\u8865\u7ed9",
+          day: 1
+        }
+      ],
+      recommended_charging: [
+        {
+          name: "\u66f2\u6c5f\u5145\u7535\u7ad9",
+          reason: "\u9002\u5408\u7b2c 2 \u5929\u8865\u80fd",
+          day: 2
+        }
+      ],
+      recommended_restaurants: []
+    },
+    1
+  );
+
+  assert.deepEqual(
+    sections.map((section) => section.key),
+    ["stay", "food-nearby", "food-hot", "drive-support"]
+  );
+  assert.equal(sections[1].title, "\u666f\u70b9\u9644\u8fd1");
+  assert.equal(sections[1].items.length, 1);
+  assert.equal(sections[1].items[0].mapKey, "food::\u7fe0\u6e56\u7c73\u7ebf::1");
+  assert.equal(sections[2].title, "\u7206\u706b\u63a8\u8350");
+  assert.equal(sections[3].groups.length, 2);
+  assert.equal(sections[3].groups[0].key, "parking");
+  assert.equal(sections[3].groups[1].key, "refuel");
+});
+
+test("marker metadata uses Chinese-first labels", () => {
+  assert.equal(getMapKindMeta("spot").marker, "\u666f");
+  assert.equal(getMapKindMeta("stay").marker, "\u5bbf");
+  assert.equal(getMapKindMeta("food").marker, "\u98df");
+  assert.equal(getMapKindMeta("charging").marker, "\u7535");
+});
+
+test("map entry builder emits grouped place kinds and keeps day filter", () => {
+  const plan = {
+    recommended_hotels: [
+      { name: "\u7fe0\u6e56\u9152\u5e97", address: "\u7fe0\u6e56\u7247\u533a", latitude: 25.04, longitude: 102.71 }
+    ],
+    recommended_food_nearby: [
+      { name: "\u7fe0\u6e56\u7c73\u7ebf", address: "\u7fe0\u6e56", latitude: 25.04, longitude: 102.70, day: 1 }
+    ],
+    recommended_food_hot: [
+      { name: "\u8fc7\u6865\u7c73\u7ebf\u9986", address: "\u8001\u8857", latitude: 25.05, longitude: 102.72 }
+    ],
+    recommended_parking: [
+      { name: "\u5357\u95e8\u505c\u8f66\u573a", address: "\u57ce\u5899\u5357\u4fa7", latitude: 34.23, longitude: 108.95, day: 1 }
+    ],
+    recommended_refuel: [
+      { name: "\u73af\u57ce\u52a0\u6cb9\u7ad9", address: "\u4e8c\u73af\u5357\u8def", latitude: 34.20, longitude: 108.98, day: 1 }
+    ],
+    recommended_charging: [
+      { name: "\u66f2\u6c5f\u5feb\u5145\u7ad9", address: "\u66f2\u6c5f\u65b0\u533a", latitude: 34.19, longitude: 108.99, day: 2 }
+    ],
+    recommended_restaurants: [],
+    daily_itinerary: [
+      {
+        day: 1,
+        activities: [
+          { name: "\u57ce\u5899", address: "\u5357\u95e8", latitude: 34.26, longitude: 108.95 }
+        ]
+      }
+    ]
+  };
+
+  const entries = buildMapEntriesData(plan, 1);
+
+  assert.equal(entries.some((entry) => entry.kind === "stay"), true);
+  assert.equal(entries.some((entry) => entry.kind === "food"), true);
+  assert.equal(entries.some((entry) => entry.kind === "parking"), true);
+  assert.equal(entries.some((entry) => entry.kind === "refuel"), true);
+  assert.equal(entries.some((entry) => entry.kind === "charging"), false);
+  assert.equal(entries.some((entry) => entry.kind === "spot"), true);
+  assert.equal(isSelfDriveMode("Self-drive"), true);
+  assert.equal(buildPlaceKey("charging", plan.recommended_charging[0]), "charging::\u66f2\u6c5f\u5feb\u5145\u7ad9::2");
 });
 
 test("motion helper returns layered class names", () => {
